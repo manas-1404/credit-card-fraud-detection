@@ -420,3 +420,288 @@ class BaseModel(ABC):
             **params: Hyperparameters to set
         """
         pass
+
+class XGBoostModel(BaseModel):
+    """
+    XGBoost classifier wrapper.
+    Requires numeric labels - use LabelEncoderWrapper for y.
+    """
+
+    def __init__(
+            self,
+            n_estimators: int = 100,
+            learning_rate: float = 0.1,
+            max_depth: int = 6,
+            min_child_weight: int = 1,
+            subsample: float = 1.0,
+            colsample_bytree: float = 1.0,
+            gamma: float = 0.0,
+            reg_alpha: float = 0.0,
+            reg_lambda: float = 1.0,
+            random_state: Optional[int] = 42,
+            n_jobs: int = -1,
+            verbosity: int = 1,
+            use_gpu: bool = False
+    ):
+        """
+        Initialize XGBoost model.
+
+        Args:
+            n_estimators: Number of boosting rounds
+            learning_rate: Step size shrinkage
+            max_depth: Maximum tree depth
+            min_child_weight: Minimum sum of instance weight
+            subsample: Subsample ratio of training instances
+            colsample_bytree: Subsample ratio of columns
+            gamma: Minimum loss reduction for split
+            reg_alpha: L1 regularization
+            reg_lambda: L2 regularization
+            random_state: Random seed
+            n_jobs: Number of parallel jobs
+            verbosity: Verbosity level
+            use_gpu: Whether to use GPU acceleration (requires CUDA)
+        """
+        super().__init__()
+
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.min_child_weight = min_child_weight
+        self.subsample = subsample
+        self.colsample_bytree = colsample_bytree
+        self.gamma = gamma
+        self.reg_alpha = reg_alpha
+        self.reg_lambda = reg_lambda
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        self.verbosity = verbosity
+        self.use_gpu = use_gpu
+
+        self.sample_weights: Optional[np.ndarray] = None
+
+        self.model = XGBClassifier(
+            n_estimators=self.n_estimators,
+            learning_rate=self.learning_rate,
+            max_depth=self.max_depth,
+            min_child_weight=self.min_child_weight,
+            subsample=self.subsample,
+            colsample_bytree=self.colsample_bytree,
+            gamma=self.gamma,
+            reg_alpha=self.reg_alpha,
+            reg_lambda=self.reg_lambda,
+            random_state=self.random_state,
+            n_jobs=self.n_jobs,
+            verbosity=self.verbosity,
+            eval_metric='mlogloss',
+            device='cuda' if self.use_gpu else None,
+            tree_method='hist' if self.use_gpu else None
+        )
+
+    def fit(
+            self,
+            X_train: pd.DataFrame,
+            y_train: pd.Series,
+            sample_weight: Optional[np.ndarray] = None
+    ) -> 'XGBoostModel':
+        """
+        Train XGBoost model.
+
+        Args:
+            X_train: Training features
+            y_train: Training labels (MUST be numeric, use LabelEncoderWrapper)
+            sample_weight: Sample weights for imbalanced classes
+        """
+        device = "GPU (CUDA)" if self.use_gpu else "CPU"
+        print(f"Training XGBoost with {self.n_estimators} estimators on {device}...")
+
+        if sample_weight is not None:
+            self.sample_weights = sample_weight
+            self.model.fit(X_train, y_train, sample_weight=sample_weight)
+        else:
+            self.model.fit(X_train, y_train)
+
+        self._is_fitted = True
+        print("Training complete!")
+
+        return self
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Make predictions.
+
+        Args:
+            X: Feature dataframe
+        """
+        if not self._is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        return self.model.predict(X)
+
+    def get_feature_importance(self) -> pd.Series:
+        """
+        Get feature importance scores.
+        """
+        if not self._is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        importances = self.model.feature_importances_
+
+        if hasattr(self.model, 'feature_names_in_'):
+            feature_names = self.model.feature_names_in_
+        else:
+            feature_names = [f"feature_{i}" for i in range(len(importances))]
+
+        return pd.Series(importances, index=feature_names).sort_values(ascending=False)
+
+    def get_params(self) -> Dict[str, Any]:
+        """
+        Get model hyperparameters.
+        """
+        return {
+            'n_estimators': self.n_estimators,
+            'learning_rate': self.learning_rate,
+            'max_depth': self.max_depth,
+            'min_child_weight': self.min_child_weight,
+            'subsample': self.subsample,
+            'colsample_bytree': self.colsample_bytree,
+            'gamma': self.gamma,
+            'reg_alpha': self.reg_alpha,
+            'reg_lambda': self.reg_lambda,
+            'random_state': self.random_state,
+            'n_jobs': self.n_jobs,
+            'verbosity': self.verbosity,
+            'use_gpu': self.use_gpu
+        }
+
+    def set_params(self, **params) -> 'XGBoostModel':
+        """
+        Set model hyperparameters.
+
+        Args:
+            **params: Hyperparameters to set
+        """
+        valid_params = set(self.get_params().keys())
+
+        for key, value in params.items():
+            if key in valid_params:
+                setattr(self, key, value)
+            else:
+                raise ValueError(f"Invalid parameter: {key}")
+
+        self.model = XGBClassifier(
+            n_estimators=self.n_estimators,
+            learning_rate=self.learning_rate,
+            max_depth=self.max_depth,
+            min_child_weight=self.min_child_weight,
+            subsample=self.subsample,
+            colsample_bytree=self.colsample_bytree,
+            gamma=self.gamma,
+            reg_alpha=self.reg_alpha,
+            reg_lambda=self.reg_lambda,
+            random_state=self.random_state,
+            n_jobs=self.n_jobs,
+            verbosity=self.verbosity,
+            eval_metric='mlogloss',
+            device='cuda' if self.use_gpu else None,
+            tree_method='hist' if self.use_gpu else None
+        )
+
+        self._is_fitted = False
+
+        return self
+
+    def __repr__(self) -> str:
+        """String representation."""
+        device = "gpu" if self.use_gpu else "cpu"
+        if self._is_fitted:
+            return f"XGBoostModel(fitted=True, n_estimators={self.n_estimators}, device={device})"
+        else:
+            return f"XGBoostModel(fitted=False, n_estimators={self.n_estimators}, device={device})"
+
+    def tune_hyperparameters(
+            self,
+            X_train: pd.DataFrame,
+            y_train: pd.Series,
+            X_val: pd.DataFrame,
+            y_val: pd.Series,
+            param_distributions: Dict[str, Any],
+            n_trials: int = 50,
+            metric: str = 'macro_f1',
+            sample_weight: Optional[np.ndarray] = None
+    ) -> Dict[str, Any]:
+        """
+        Tune hyperparameters using Optuna.
+
+        Args:
+            X_train: Training features
+            y_train: Training labels (MUST be numeric)
+            X_val: Validation features
+            y_val: Validation labels (MUST be numeric)
+            param_distributions: Dictionary where
+                tuple (low, high) suggests int or float based on type
+                list [choices] suggests categorical
+                single value means fixed parameter
+            n_trials: Number of optimization trials
+            metric: Metric to optimize ('macro_f1', 'weighted_f1', 'accuracy')
+            sample_weight: Sample weights for training
+        """
+
+        def objective(trial):
+            params = {}
+
+            for param_name, param_value in param_distributions.items():
+                if isinstance(param_value, tuple):
+                    low, high = param_value
+                    if isinstance(low, int) and isinstance(high, int):
+                        params[param_name] = trial.suggest_int(param_name, low, high)
+                    else:
+                        params[param_name] = trial.suggest_float(param_name, low, high)
+
+                elif isinstance(param_value, list):
+                    params[param_name] = trial.suggest_categorical(param_name, param_value)
+
+                else:
+                    params[param_name] = param_value
+
+            model = XGBClassifier(**params, eval_metric='mlogloss')
+
+            if sample_weight is not None:
+                model.fit(X_train, y_train, sample_weight=sample_weight)
+            else:
+                model.fit(X_train, y_train)
+
+            y_pred = model.predict(X_val)
+
+            if metric == 'macro_f1':
+                score = f1_score(y_val, y_pred, average='macro', zero_division=0)
+            elif metric == 'weighted_f1':
+                score = f1_score(y_val, y_pred, average='weighted', zero_division=0)
+            elif metric == 'accuracy':
+                score = accuracy_score(y_val, y_pred)
+            else:
+                raise ValueError(f"Unknown metric: {metric}")
+
+            return score
+
+        print(f"Starting hyperparameter tuning with {n_trials} trials...")
+        print(f"Optimizing for: {metric}")
+
+        study = optuna.create_study(
+            direction='maximize',
+            sampler=optuna.samplers.TPESampler(seed=self.random_state)
+        )
+
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+        print(f"\nBest {metric}: {study.best_value:.4f}")
+        print("Best hyperparameters:")
+        for key, value in study.best_params.items():
+            print(f"  {key}: {value}")
+
+        self.set_params(**study.best_params)
+
+        return {
+            'best_params': study.best_params,
+            'best_score': study.best_value,
+            'study': study
+        }
