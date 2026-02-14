@@ -4,8 +4,12 @@ import torch.optim as optim
 from matplotlib import pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
-from sklearn.metrics import average_precision_score, recall_score, precision_score, f1_score, confusion_matrix, classification_report
-
+from sklearn.metrics import average_precision_score, recall_score, precision_score, f1_score, confusion_matrix, classification_report, accuracy_score
+from abc import ABC, abstractmethod
+from typing import Optional, Dict, Any
+import pandas as pd
+from xgboost import XGBClassifier
+import optuna
 
 class NeuralNetwork(nn.Module):
     def __init__(self, input_size, hidden_sizes, dropout_rate):
@@ -282,3 +286,137 @@ class Trainer:
         """Load model weights"""
         self.model.load_state_dict(torch.load(filepath, map_location=self.device))
         print(f'Model loaded from {filepath}')
+
+
+class BaseModel(ABC):
+    """
+    Abstract base class for all ML models.
+    """
+
+    def __init__(self):
+        """
+        Initialize base model.
+        """
+        self.model = None
+        self._is_fitted = False
+
+    @abstractmethod
+    def fit(self, X_train: pd.DataFrame, y_train: pd.Series) -> 'BaseModel':
+        """
+        Train the model.
+
+        Args:
+            X_train: Training features
+            y_train: Training labels
+        """
+        pass
+
+    @abstractmethod
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Make predictions.
+
+        Args:
+            X: Feature dataframe
+        """
+        pass
+
+    def predict_probabilities(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Predict class probabilities.
+
+        Args:
+            X: Feature dataframe
+        """
+        if not self._is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        if not hasattr(self.model, 'predict_proba'):
+            raise NotImplementedError("Model does not support predict_proba")
+
+        return self.model.predict_proba(X)
+
+    def evaluate(self, X_test: pd.DataFrame, y_test: pd.Series, zero_division: int = 0) -> Dict[str, Any]:
+        """
+        Evaluate model performance.
+
+        Args:
+            X_test: Test features
+            y_test: Test labels
+            zero_division: Value to return for zero division in metrics
+        """
+        if not self._is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        y_pred = self.predict(X_test)
+
+        report = classification_report(y_test, y_pred, zero_division=zero_division, output_dict=True)
+
+        cm = confusion_matrix(y_test, y_pred)
+
+        accuracy = report['accuracy']
+        macro_f1 = report['macro avg']['f1-score']
+        weighted_f1 = report['weighted avg']['f1-score']
+
+        return {
+            'accuracy': accuracy,
+            'macro_f1': macro_f1,
+            'weighted_f1': weighted_f1,
+            'classification_report': report,
+            'confusion_matrix': cm,
+            'predictions': y_pred
+        }
+
+    def print_evaluation(self, X_test: pd.DataFrame, y_test: pd.Series, zero_division: int = 0) -> None:
+        """
+        Print evaluation metrics.
+
+        Args:
+            X_test: Test features
+            y_test: Test labels
+            zero_division: Value to return for zero division
+        """
+        results = self.evaluate(X_test, y_test, zero_division)
+
+        print("=" * 70)
+        print("MODEL EVALUATION")
+        print("=" * 70)
+        print(f"Accuracy: {results['accuracy']:.4f}")
+        print(f"Macro F1-Score: {results['macro_f1']:.4f}")
+        print(f"Weighted F1-Score: {results['weighted_f1']:.4f}")
+        print("\n" + "=" * 70)
+        print("CLASSIFICATION REPORT")
+        print("=" * 70)
+        print(classification_report(y_test, results['predictions'], zero_division=zero_division))
+
+    def is_fitted(self) -> bool:
+        """
+        Check if model has been fitted.
+        """
+        return self._is_fitted
+
+    def get_model(self):
+        """
+        Get the underlying sklearn model.
+        """
+        if not self._is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        return self.model
+
+    @abstractmethod
+    def get_params(self) -> Dict[str, Any]:
+        """
+        Get model hyperparameters.
+        """
+        pass
+
+    @abstractmethod
+    def set_params(self, **params) -> 'BaseModel':
+        """
+        Set model hyperparameters.
+
+        Args:
+            **params: Hyperparameters to set
+        """
+        pass
