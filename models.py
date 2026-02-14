@@ -349,22 +349,28 @@ class BaseModel(ABC):
             raise ValueError("Model not fitted. Call fit() first.")
 
         y_pred = self.predict(X_test)
+        y_pred_proba = self.predict_probabilities(X_test)[:, 1]
 
         report = classification_report(y_test, y_pred, zero_division=zero_division, output_dict=True)
 
         cm = confusion_matrix(y_test, y_pred)
 
+        pr_auc = average_precision_score(y_test, y_pred_proba)
         accuracy = report['accuracy']
-        macro_f1 = report['macro avg']['f1-score']
-        weighted_f1 = report['weighted avg']['f1-score']
+        precision = precision_score(y_test, y_pred, zero_division=zero_division)
+        recall = recall_score(y_test, y_pred, zero_division=zero_division)
+        f1 = f1_score(y_test, y_pred, zero_division=zero_division)
 
         return {
+            'pr_auc': pr_auc,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
             'accuracy': accuracy,
-            'macro_f1': macro_f1,
-            'weighted_f1': weighted_f1,
             'classification_report': report,
             'confusion_matrix': cm,
-            'predictions': y_pred
+            'predictions': y_pred,
+            'probabilities': y_pred_proba
         }
 
     def print_evaluation(self, X_test: pd.DataFrame, y_test: pd.Series, zero_division: int = 0) -> None:
@@ -381,9 +387,25 @@ class BaseModel(ABC):
         print("=" * 70)
         print("MODEL EVALUATION")
         print("=" * 70)
-        print(f"Accuracy: {results['accuracy']:.4f}")
-        print(f"Macro F1-Score: {results['macro_f1']:.4f}")
-        print(f"Weighted F1-Score: {results['weighted_f1']:.4f}")
+        print(f"PR-AUC:    {results['pr_auc']:.4f}")
+        print(f"Precision: {results['precision']:.4f}")
+        print(f"Recall:    {results['recall']:.4f}")
+        print(f"F1-Score:  {results['f1']:.4f}")
+        print(f"Accuracy:  {results['accuracy']:.4f}")
+
+        print("\n" + "=" * 70)
+        print("CONFUSION MATRIX")
+        print("=" * 70)
+        cm = results['confusion_matrix']
+        print(cm)
+
+        if cm.shape == (2, 2):
+            tn, fp, fn, tp = cm.ravel()
+            print(f"\nTrue Negatives:  {tn:,}")
+            print(f"False Positives: {fp:,}")
+            print(f"False Negatives: {fn:,}")
+            print(f"True Positives:  {tp:,}")
+
         print("\n" + "=" * 70)
         print("CLASSIFICATION REPORT")
         print("=" * 70)
@@ -438,6 +460,7 @@ class XGBoostModel(BaseModel):
             gamma: float = 0.0,
             reg_alpha: float = 0.0,
             reg_lambda: float = 1.0,
+            scale_pos_weight: float = 1.0,
             random_state: Optional[int] = 42,
             n_jobs: int = -1,
             verbosity: int = 1,
@@ -456,6 +479,7 @@ class XGBoostModel(BaseModel):
             gamma: Minimum loss reduction for split
             reg_alpha: L1 regularization
             reg_lambda: L2 regularization
+            scale_pos_weight: Balancing positive and negative weights
             random_state: Random seed
             n_jobs: Number of parallel jobs
             verbosity: Verbosity level
@@ -476,6 +500,7 @@ class XGBoostModel(BaseModel):
         self.n_jobs = n_jobs
         self.verbosity = verbosity
         self.use_gpu = use_gpu
+        self.scale_pos_weight = scale_pos_weight
 
         self.sample_weights: Optional[np.ndarray] = None
 
@@ -489,10 +514,11 @@ class XGBoostModel(BaseModel):
             gamma=self.gamma,
             reg_alpha=self.reg_alpha,
             reg_lambda=self.reg_lambda,
+            scale_pos_weight=self.scale_pos_weight,
             random_state=self.random_state,
             n_jobs=self.n_jobs,
             verbosity=self.verbosity,
-            eval_metric='mlogloss',
+            eval_metric='aucpr',
             device='cuda' if self.use_gpu else None,
             tree_method='hist' if self.use_gpu else None
         )
@@ -626,7 +652,7 @@ class XGBoostModel(BaseModel):
             y_val: pd.Series,
             param_distributions: Dict[str, Any],
             n_trials: int = 50,
-            metric: str = 'macro_f1',
+            metric: str = 'pr_auc',
             sample_weight: Optional[np.ndarray] = None
     ) -> Dict[str, Any]:
         """
@@ -642,7 +668,7 @@ class XGBoostModel(BaseModel):
                 list [choices] suggests categorical
                 single value means fixed parameter
             n_trials: Number of optimization trials
-            metric: Metric to optimize ('macro_f1', 'weighted_f1', 'accuracy')
+            metric: Metric to optimize ('pr_auc', 'recall', 'precision', 'f1', 'accuracy')
             sample_weight: Sample weights for training
         """
 
@@ -663,7 +689,7 @@ class XGBoostModel(BaseModel):
                 else:
                     params[param_name] = param_value
 
-            model = XGBClassifier(**params, eval_metric='mlogloss')
+            model = XGBClassifier(**params, eval_metric='aucpr')
 
             if sample_weight is not None:
                 model.fit(X_train, y_train, sample_weight=sample_weight)
@@ -671,11 +697,16 @@ class XGBoostModel(BaseModel):
                 model.fit(X_train, y_train)
 
             y_pred = model.predict(X_val)
+            y_pred_proba = model.predict_proba(X_val)[:, 1]
 
-            if metric == 'macro_f1':
-                score = f1_score(y_val, y_pred, average='macro', zero_division=0)
-            elif metric == 'weighted_f1':
-                score = f1_score(y_val, y_pred, average='weighted', zero_division=0)
+            if metric == 'pr_auc':
+                score = average_precision_score(y_val, y_pred_proba)
+            elif metric == 'recall':
+                score = recall_score(y_val, y_pred, zero_division=0)
+            elif metric == 'precision':
+                score = precision_score(y_val, y_pred, zero_division=0)
+            elif metric == 'f1':
+                score = f1_score(y_val, y_pred, zero_division=0)
             elif metric == 'accuracy':
                 score = accuracy_score(y_val, y_pred)
             else:
