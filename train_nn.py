@@ -35,12 +35,12 @@ n_fraud = sum(y_train == 1)
 
 print(f"Original frauds: {n_fraud}")
 
-target_frauds_conservative = int(n_fraud * 1.5)
+target_frauds_conservative = int(n_fraud * 2)
 
 smote_conservative = SMOTE(sampling_strategy={1: target_frauds_conservative}, random_state=3366)
 X_train_1_5x, y_train_1_5x = smote_conservative.fit_resample(X_train, y_train)
 
-print(f"After SMOTE (1.5×): {sum(y_train_1_5x == 1)} frauds")
+print(f"After SMOTE (2x): {sum(y_train_1_5x == 1)} frauds")
 print(f"Created {sum(y_train_1_5x == 1) - n_fraud} synthetic frauds")
 
 print("Input feature shape: ", X_train_1_5x.shape)
@@ -78,3 +78,5 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 trainer.train(train_loader=train_loader, val_loader=val_loader, epochs=epochs, verbose=True)
 
 trainer.print_evaluation(test_loader=test_loader)
+
+trainer.plot_history()
